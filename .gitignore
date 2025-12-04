@@ -5,9 +5,6 @@
 *.so
 *.dylib
 bootstrap
-parse-demo
-convert-otel
-lambda
 *.zip
 
 # Test binary, built with `go test -c`

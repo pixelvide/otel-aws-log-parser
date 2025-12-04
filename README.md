@@ -30,10 +30,17 @@ cd go-alb-processor
 go mod download
 go mod tidy
 
-# Build all binaries
-go build -o parse-demo ./cmd/parse-demo
-go build -o convert-otel ./cmd/convert-otel
-go build -o bootstrap ./cmd/lambda  # For Lambda deployment
+# Build all binaries to bin/ folder
+make build
+
+# Or use the build script
+./build.sh
+
+# Or build manually
+mkdir -p bin
+go build -o bin/parse-demo ./cmd/parse-demo
+go build -o bin/convert-otel ./cmd/convert-otel
+go build -o bin/lambda ./cmd/lambda
 ```
 
 ## Testing
@@ -53,13 +60,13 @@ go test -bench=. ./pkg/parser
 
 ### 1. Parse Demo (Raw JSON)
 ```bash
-./parse-demo <log-file>
+./bin/parse-demo <log-file>
 # Outputs parsed log entries as JSON array
 ```
 
 ### 2. Convert to OTLP
 ```bash
-./convert-otel <log-file>
+./bin/convert-otel <log-file>
 # Outputs OTLP-formatted logs ready for ingestion
 ```
 
