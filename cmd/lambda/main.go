@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -19,20 +20,21 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
-	
+
 	"github.com/pixelvide/otel-alb-log-parser/pkg/converter"
 	"github.com/pixelvide/otel-alb-log-parser/pkg/parser"
 )
 
 var (
-	s3Client           *s3.S3
-	otlpEndpoint       string
-	basicAuthUser      string
-	basicAuthPass      string
-	maxBatchSize       int
-	maxRetries         int
-	retryBaseSec       float64
-	logger             *slog.Logger
+	s3Client      *s3.S3
+	otlpEndpoint  string
+	basicAuthUser string
+	basicAuthPass string
+	maxBatchSize  int
+	maxRetries    int
+	retryBaseSec  float64
+	logger        *slog.Logger
+	maxConcurrent int
 )
 
 func init() {
@@ -43,13 +45,14 @@ func init() {
 	// Initialize AWS session
 	sess := session.Must(session.NewSession())
 	s3Client = s3.New(sess)
-	
+
 	// Load configuration from environment
 	otlpEndpoint = getEnv("SIGNOZ_OTLP_ENDPOINT", "http://localhost:4318/v1/logs")
 	basicAuthUser = os.Getenv("BASIC_AUTH_USERNAME")
 	basicAuthPass = os.Getenv("BASIC_AUTH_PASSWORD")
 	maxBatchSize = getEnvInt("MAX_BATCH_SIZE", 500)
 	maxRetries = getEnvInt("MAX_RETRIES", 3)
+	maxConcurrent = getEnvInt("MAX_CONCURRENT", 10)
 	retryBaseSec = 1.0
 }
 
@@ -59,31 +62,31 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 	for _, record := range s3Event.Records {
 		bucket := record.S3.Bucket.Name
 		key := record.S3.Object.Key
-		
+
 		log := logger.With("bucket", bucket, "key", key)
 		log.Info("Processing S3 object")
-		
+
 		// Read and parse logs from S3
 		entries, err := readAndParseFromS3(bucket, key)
 		if err != nil {
 			log.Error("Error processing S3 object", "error", err)
 			return err
 		}
-		
+
 		if len(entries) == 0 {
 			log.Info("No entries found")
 			continue
 		}
-		
+
 		log.Info("Successfully parsed entries", "count", len(entries))
-		
+
 		// Convert and send to OTLP
 		if err := convertAndSend(entries); err != nil {
 			log.Error("Error sending to OTLP", "error", err)
 			return err
 		}
 	}
-	
+
 	return nil
 }
 
@@ -109,69 +112,97 @@ func readAndParseFromS3(bucket, key string) ([]*parser.ALBLogEntry, error) {
 		defer gzReader.Close()
 		reader = gzReader
 	}
-	
-	// Read content
-	content, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read S3 object: %w", err)
+
+	// Create channels for parallel processing
+	linesChan := make(chan string, maxBatchSize)
+	entriesChan := make(chan *parser.ALBLogEntry, maxBatchSize)
+	var wg sync.WaitGroup
+
+	// Start workers
+	// Use maxConcurrent/2 for parsing to leave room for sending logic, or just use maxConcurrent
+	numWorkers := maxConcurrent
+	if numWorkers < 1 {
+		numWorkers = 1
 	}
-	
-	lines := strings.Split(string(content), "\n")
-	logger.Info("Read lines from file", "line_count", len(lines))
-	
-	entries := make([]*parser.ALBLogEntry, 0, len(lines))
-	skipped := 0
-	
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		
-		entry, err := parser.ParseLogLine(line)
-		if err != nil {
-			skipped++
-			continue
-		}
-		if entry != nil {
-			entries = append(entries, entry)
-		}
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for line := range linesChan {
+				if line == "" {
+					continue
+				}
+				entry, err := parser.ParseLogLine(line)
+				if err == nil && entry != nil {
+					entriesChan <- entry
+				}
+			}
+		}()
 	}
-	
-	if skipped > 0 {
-		logger.Warn("Skipped malformed lines", "skipped_count", skipped)
+
+	// Start a goroutine to read lines and send to workers
+	go func() {
+		scanner := bufio.NewScanner(reader)
+		// Increase buffer size if needed, default is 64k which should be enough for log lines
+		// but ALB logs can be long. Let's use a larger buffer just in case.
+		buf := make([]byte, 0, 64*1024)
+		scanner.Buffer(buf, 1024*1024) // 1MB max line size
+
+		for scanner.Scan() {
+			linesChan <- scanner.Text()
+		}
+
+		if err := scanner.Err(); err != nil {
+			logger.Error("Error scanning S3 object", "error", err)
+		}
+
+		close(linesChan)
+	}()
+
+	// Start a goroutine to close entriesChan when all workers are done
+	go func() {
+		wg.Wait()
+		close(entriesChan)
+	}()
+
+	// Collect results
+	entries := make([]*parser.ALBLogEntry, 0)
+	for entry := range entriesChan {
+		entries = append(entries, entry)
 	}
-	
+
+	logger.Info("Parsed entries", "count", len(entries))
 	return entries, nil
 }
 
 func convertAndSend(entries []*parser.ALBLogEntry) error {
 	// Group by resource
 	grouped := make(map[string]*resourceGroup)
-	
+
 	for _, entry := range entries {
 		resKey := getResourceKey(entry)
-		
+
 		if _, exists := grouped[resKey]; !exists {
 			grouped[resKey] = &resourceGroup{
 				ResourceAttrs: converter.ExtractResourceAttributes(entry),
 				LogRecords:    []converter.OTelLogRecord{},
 			}
 		}
-		
+
 		logRecord := converter.ConvertToOTel(entry)
 		grouped[resKey].LogRecords = append(grouped[resKey].LogRecords, logRecord)
 	}
-	
+
 	logger.Info("Grouped logs", "resource_group_count", len(grouped))
-	
+
 	logger.Info("Grouped logs", "resource_group_count", len(grouped))
-	
+
 	// Concurrency control
-	maxConcurrent := 10
 	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
 	errChan := make(chan error, 1)
-	
+
 	totalSent := 0
 	var sentLock sync.Mutex
 
@@ -179,7 +210,7 @@ func convertAndSend(entries []*parser.ALBLogEntry) error {
 	for resKey, group := range grouped {
 		groupLog := logger.With("resource_key", resKey, "total_logs", len(group.LogRecords))
 		groupLog.Info("Processing resource group")
-		
+
 		// Split into batches
 		batchCount := 0
 		for i := 0; i < len(group.LogRecords); i += maxBatchSize {
@@ -194,22 +225,22 @@ func convertAndSend(entries []*parser.ALBLogEntry) error {
 			if end > len(group.LogRecords) {
 				end = len(group.LogRecords)
 			}
-			
+
 			batch := group.LogRecords[i:end]
 			payload := buildPayload(group.ResourceAttrs, batch)
 			currentBatchCount := batchCount + 1
 			currentBatchSize := len(batch)
-			
+
 			wg.Add(1)
 			go func(p converter.OTLPPayload, bID int, bSize int, log *slog.Logger) {
 				defer wg.Done()
-				
+
 				// Acquire semaphore
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				
+
 				log.Info("Sending batch", "batch_id", bID, "batch_size", bSize)
-				
+
 				if err := sendWithRetry(p); err != nil {
 					log.Error("Failed to send batch", "batch_id", bID, "error", err)
 					// Try to report error (non-blocking)
@@ -219,26 +250,26 @@ func convertAndSend(entries []*parser.ALBLogEntry) error {
 					}
 					return
 				}
-				
+
 				sentLock.Lock()
 				totalSent += bSize
 				sentLock.Unlock()
 			}(payload, currentBatchCount, currentBatchSize, groupLog)
-			
+
 			batchCount++
 		}
 	}
-	
+
 	// Wait for all batches to complete
 	wg.Wait()
-	
+
 	// Check for any errors that occurred
 	select {
 	case err := <-errChan:
 		return err
 	default:
 	}
-	
+
 	logger.Info("Successfully sent all logs", "total_sent", totalSent, "resource_groups", len(grouped))
 	return nil
 }
@@ -269,7 +300,7 @@ func sendWithRetry(payload converter.OTLPPayload) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal payload: %w", err)
 	}
-	
+
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
@@ -278,19 +309,19 @@ func sendWithRetry(payload converter.OTLPPayload) error {
 			sleep := time.Duration(retryBaseSec*float64(multiplier)) * time.Second
 			time.Sleep(sleep)
 		}
-		
+
 		req, err := http.NewRequest("POST", otlpEndpoint, bytes.NewBuffer(body))
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		
+
 		req.Header.Set("Content-Type", "application/json")
-		
+
 		if basicAuthUser != "" && basicAuthPass != "" {
 			req.SetBasicAuth(basicAuthUser, basicAuthPass)
 		}
-		
+
 		client := &http.Client{Timeout: 30 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -298,19 +329,19 @@ func sendWithRetry(payload converter.OTLPPayload) error {
 			lastErr = err
 			continue
 		}
-		
+
 		defer resp.Body.Close()
-		
+
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			logger.Info("Batch sent successfully", "attempt", attempt+1, "status", resp.StatusCode)
 			return nil
 		}
-		
+
 		respBody, _ := io.ReadAll(resp.Body)
 		logger.Warn("Batch send attempt failed", "attempt", attempt+1, "status", resp.StatusCode, "response", string(respBody))
 		lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
-	
+
 	return fmt.Errorf("failed after %d attempts: %w", maxRetries+1, lastErr)
 }
 
