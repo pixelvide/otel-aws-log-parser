@@ -5,7 +5,7 @@ High-performance Golang implementation of ALB log processing to OpenTelemetry fo
 ## Project Structure
 
 ```
-go-alb-processor/
+otel-alb-log-parser/
 ├── go.mod                    # Go module definition
 ├── cmd/
 │   ├── parse-demo/          # CLI: Parse ALB logs to JSON
@@ -24,7 +24,7 @@ go-alb-processor/
 ## Building
 
 ```bash
-cd go-alb-processor
+cd otel-alb-log-parser
 
 # Download dependencies
 go mod download
@@ -33,8 +33,7 @@ go mod tidy
 # Build all binaries to bin/ folder
 make build
 
-# Or use the build script
-./build.sh
+
 
 # Or build manually
 mkdir -p bin

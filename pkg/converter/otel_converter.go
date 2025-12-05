@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pixelvide/go-alb-processor/pkg/parser"
+	"github.com/pixelvide/otel-alb-log-parser/pkg/parser"
 )
 
 // OTelLogRecord represents an OpenTelemetry log record

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/pixelvide/go-alb-processor/pkg/converter"
-	"github.com/pixelvide/go-alb-processor/pkg/parser"
+	"github.com/pixelvide/otel-alb-log-parser/pkg/converter"
+	"github.com/pixelvide/otel-alb-log-parser/pkg/parser"
 )
 
 func main() {

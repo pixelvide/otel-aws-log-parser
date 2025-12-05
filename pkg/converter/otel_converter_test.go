@@ -3,7 +3,7 @@ package converter
 import (
 	"testing"
 
-	"github.com/pixelvide/go-alb-processor/pkg/parser"
+	"github.com/pixelvide/otel-alb-log-parser/pkg/parser"
 )
 
 func TestParseTraceID(t *testing.T) {

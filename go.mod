@@ -1,4 +1,4 @@
-module github.com/pixelvide/go-alb-processor
+module github.com/pixelvide/otel-alb-log-parser
 
 go 1.21
 

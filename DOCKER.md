@@ -23,11 +23,19 @@ docker-compose logs -f alb-processor
 
 ### 3. Test Locally
 ```bash
-# Make the test script executable
-chmod +x test-lambda-local.sh
+# Create test event
+cat > event.json << EOF
+{
+  "Records": [{
+    "s3": {
+      "bucket": {"name": "your-bucket"},
+      "object": {"key": "path/to/log.gz"}
+    }
+  }]
+}
 
-# Run the test
-./test-lambda-local.sh
+# Invoke function
+curl -XPOST "http://localhost:8080/2015-03-31/functions/function/invocations" -d @event.json
 ```
 
 ## Deploy to AWS Lambda (Container Image)
