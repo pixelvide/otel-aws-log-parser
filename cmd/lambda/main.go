@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -86,15 +87,25 @@ func readAndParseFromS3(bucket, key string) ([]*parser.ALBLogEntry, error) {
 		return nil, fmt.Errorf("failed to get S3 object: %w", err)
 	}
 	defer result.Body.Close()
+
+	var reader io.Reader = result.Body
+
+	// Handle gzip compression
+	if strings.HasSuffix(key, ".gz") {
+		gzReader, err := gzip.NewReader(result.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+		}
+		defer gzReader.Close()
+		reader = gzReader
+	}
 	
 	// Read content
-	content, err := io.ReadAll(result.Body)
+	content, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read S3 object: %w", err)
 	}
 	
-	// Parse lines (assume gzipped content is already decompressed by S3 GetObject)
-	// Actually, we need to handle gzip ourselves
 	lines := strings.Split(string(content), "\n")
 	entries := make([]*parser.ALBLogEntry, 0, len(lines))
 	
