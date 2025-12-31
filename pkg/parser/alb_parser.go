@@ -46,6 +46,9 @@ type ALBLogEntry struct {
 	Classification         string
 	ClassificationReason   string
 	ConnTraceID            string
+	TransformedHost        string
+	TransformedURI         string
+	RequestTransformStatus string
 }
 
 // Regex pattern matching Athena schema (same as Python implementation)
@@ -101,6 +104,9 @@ func ParseLogLine(line string) (*ALBLogEntry, error) {
 		Classification:         getString(matches, 32),
 		ClassificationReason:   getString(matches, 33),
 		ConnTraceID:            getString(matches, 34),
+		TransformedHost:        getString(matches, 35),
+		TransformedURI:         getString(matches, 36),
+		RequestTransformStatus: getString(matches, 37),
 	}
 
 	return entry, nil

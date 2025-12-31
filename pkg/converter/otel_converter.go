@@ -410,9 +410,10 @@ func buildAttributesNLB(entry *parser.NLBLogEntry) []OTelAttribute {
 	addAttr(&attrs, "aws.nlb.chosen_cert_arn", entry.ChosenCertARN)
 	addAttr(&attrs, "aws.nlb.chosen_cert_serial", entry.ChosenCertSerial)
 	addAttr(&attrs, "aws.nlb.tls_named_group", entry.TLSNamedGroup)
-	addAttr(&attrs, "aws.nlb.alpn_protocol", entry.ALPNProtocol)
+	addAttr(&attrs, "aws.nlb.alpn_frontend_protocol", entry.ALPNFrontEndProtocol)
+	addAttr(&attrs, "aws.nlb.alpn_backend_protocol", entry.ALPNBackEndProtocol)
 	addAttr(&attrs, "aws.nlb.alpn_client_preference_list", entry.ALPNClientPreferenceList)
-	addFloatAttr(&attrs, "aws.nlb.tls_handshake_time_ms", entry.TLSHandshakeTimeMS)
+	addAttr(&attrs, "aws.nlb.tls_connection_creation_time", entry.TLSConnectionCreationTime)
 
 	return attrs
 }
