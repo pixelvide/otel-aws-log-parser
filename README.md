@@ -1,4 +1,4 @@
-# Go ALB Log Processor
+# AWS LB Log to OTel Processor
 
 High-performance Golang implementation of ALB log processing to OpenTelemetry format.
 
@@ -24,7 +24,7 @@ otel-alb-log-parser/
 ## Building
 
 ```bash
-cd otel-alb-log-parser
+cd otel-lb-log-parser
 
 # Download dependencies
 go mod download

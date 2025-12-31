@@ -7,23 +7,23 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pixelvide/otel-alb-log-parser/pkg/parser"
+	"github.com/pixelvide/otel-lb-log-parser/pkg/parser"
 )
 
 // OTelLogRecord represents an OpenTelemetry log record
 type OTelLogRecord struct {
-	TimeUnixNano   string                 `json:"timeUnixNano"`
-	SeverityNumber int                    `json:"severityNumber"`
-	SeverityText   string                 `json:"severityText"`
-	Body           map[string]string      `json:"body"`
-	Attributes     []OTelAttribute        `json:"attributes"`
-	TraceID        string                 `json:"traceId"`
-	SpanID         string                 `json:"spanId"`
+	TimeUnixNano   string            `json:"timeUnixNano"`
+	SeverityNumber int               `json:"severityNumber"`
+	SeverityText   string            `json:"severityText"`
+	Body           map[string]string `json:"body"`
+	Attributes     []OTelAttribute   `json:"attributes"`
+	TraceID        string            `json:"traceId"`
+	SpanID         string            `json:"spanId"`
 }
 
 // OTelAttribute represents a key-value attribute
 type OTelAttribute struct {
-	Key   string        `json:"key"`
+	Key   string       `json:"key"`
 	Value OTelAnyValue `json:"value"`
 }
 
@@ -42,7 +42,7 @@ type ResourceAttributes struct {
 
 // ScopeLog represents a scope with log records
 type ScopeLog struct {
-	Scope      Scope            `json:"scope"`
+	Scope      Scope           `json:"scope"`
 	LogRecords []OTelLogRecord `json:"logRecords"`
 }
 
@@ -55,7 +55,7 @@ type Scope struct {
 // ResourceLog represents a resource with scope logs
 type ResourceLog struct {
 	Resource  ResourceAttributes `json:"resource"`
-	ScopeLogs []ScopeLog        `json:"scopeLogs"`
+	ScopeLogs []ScopeLog         `json:"scopeLogs"`
 }
 
 // OTLPPayload represents the complete OTLP payload
@@ -73,20 +73,20 @@ func ParseTraceID(albTraceID string) string {
 
 	// Remove "Root=" prefix
 	albTraceID = strings.TrimPrefix(albTraceID, "Root=")
-	
+
 	// Split by hyphens: ['1', '58337262', '36d228ad5d99923122bbe354']
 	parts := strings.Split(albTraceID, "-")
-	
+
 	if len(parts) >= 3 {
 		// Combine timestamp (8 chars) + unique ID (24 chars) = 32 chars
 		traceID := parts[1] + parts[2]
-		
+
 		// Validate it's 32 hex characters
 		if len(traceID) == 32 && isHex(traceID) {
 			return strings.ToLower(traceID)
 		}
 	}
-	
+
 	return ""
 }
 
@@ -102,23 +102,23 @@ func isHex(s string) bool {
 // ParseRequestURL extracts HTTP attributes from URL
 func ParseRequestURL(requestURL string) map[string]string {
 	attrs := make(map[string]string)
-	
+
 	if requestURL == "" || requestURL == "-" {
 		return attrs
 	}
-	
+
 	u, err := url.Parse(requestURL)
 	if err != nil {
 		return attrs
 	}
-	
+
 	if u.Scheme != "" {
 		attrs["http.scheme"] = u.Scheme
 	}
-	
+
 	if u.Path != "" {
 		attrs["url.path"] = u.Path
-		
+
 		if u.RawQuery != "" {
 			attrs["url.query"] = u.RawQuery
 			attrs["http.target"] = u.Path + "?" + u.RawQuery
@@ -126,7 +126,7 @@ func ParseRequestURL(requestURL string) map[string]string {
 			attrs["http.target"] = u.Path
 		}
 	}
-	
+
 	return attrs
 }
 
@@ -137,13 +137,13 @@ func ExtractResourceAttributes(entry *parser.ALBLogEntry) []OTelAttribute {
 		{Key: "cloud.platform", Value: stringValue("aws_elastic_load_balancing")},
 		{Key: "service.name", Value: stringValue("alb-log-parser")},
 	}
-	
+
 	// Extract region and account from ARN
 	arn := entry.TargetGroupARN
 	if arn == "" || arn == "-" {
 		arn = entry.ChosenCertARN
 	}
-	
+
 	if arn != "" && arn != "-" {
 		parts := strings.Split(arn, ":")
 		if len(parts) >= 5 {
@@ -153,7 +153,7 @@ func ExtractResourceAttributes(entry *parser.ALBLogEntry) []OTelAttribute {
 			)
 		}
 	}
-	
+
 	return attrs
 }
 
@@ -161,14 +161,14 @@ func ExtractResourceAttributes(entry *parser.ALBLogEntry) []OTelAttribute {
 func ConvertToOTel(entry *parser.ALBLogEntry) OTelLogRecord {
 	// Convert timestamp
 	timeUnixNano := convertTimestamp(entry.Time)
-	
+
 	// Build attributes
 	attributes := buildAttributes(entry)
-	
+
 	// Determine severity
 	severityText := "INFO"
 	severityNumber := 9
-	
+
 	if entry.ELBStatusCode >= 500 {
 		severityText = "ERROR"
 		severityNumber = 17
@@ -176,17 +176,17 @@ func ConvertToOTel(entry *parser.ALBLogEntry) OTelLogRecord {
 		severityText = "WARN"
 		severityNumber = 13
 	}
-	
+
 	// Build body
 	bodyContent := fmt.Sprintf("%s %s %s", entry.RequestVerb, entry.RequestURL, entry.RequestProto)
-	
+
 	// Parse trace ID
 	traceID := ParseTraceID(entry.TraceID)
-	
+
 	// Generate a random Span ID (16 hex chars)
 	// This makes the log entry appear as a span in the trace
 	spanID := generateSpanID()
-	
+
 	return OTelLogRecord{
 		TimeUnixNano:   fmt.Sprintf("%d", timeUnixNano),
 		SeverityNumber: severityNumber,
@@ -202,14 +202,14 @@ func ConvertToOTel(entry *parser.ALBLogEntry) OTelLogRecord {
 func generateSpanID() string {
 	b := make([]byte, 8)
 	// Use time as seed for simple randomness, or crypto/rand for better
-	// For high-throughput logs, math/rand seeded once is faster, 
+	// For high-throughput logs, math/rand seeded once is faster,
 	// but here we'll just use a simple hex generation from random bytes
 	// Note: In a real high-perf scenario, use a proper random source
 	// For now, using a simple pseudo-random approach based on time is sufficient
 	// or just reading from crypto/rand
-	
+
 	// Using a simple fast approach:
-	// We need 16 hex chars. 
+	// We need 16 hex chars.
 	// Let's use crypto/rand properly
 	_, err := rand.Read(b)
 	if err != nil {
@@ -221,40 +221,40 @@ func generateSpanID() string {
 
 func buildAttributes(entry *parser.ALBLogEntry) []OTelAttribute {
 	attrs := []OTelAttribute{}
-	
+
 	// HTTP attributes
 	addAttr(&attrs, "http.request.method", entry.RequestVerb)
 	addIntAttr(&attrs, "http.response.status_code", entry.ELBStatusCode)
 	addInt64Attr(&attrs, "http.request.body.size", entry.ReceivedBytes)
 	addInt64Attr(&attrs, "http.response.body.size", entry.SentBytes)
 	addAttr(&attrs, "url.full", entry.RequestURL)
-	
+
 	// Parse URL for additional attributes
 	urlAttrs := ParseRequestURL(entry.RequestURL)
 	for k, v := range urlAttrs {
 		addAttr(&attrs, k, v)
 	}
-	
+
 	// Network attributes
 	addAttr(&attrs, "network.protocol.name", "http")
 	addAttr(&attrs, "network.protocol.version", entry.RequestProto)
-	
+
 	// Client attributes
 	addAttr(&attrs, "client.address", entry.ClientIP)
 	addIntAttr(&attrs, "client.port", entry.ClientPort)
-	
+
 	// Server attributes
 	addAttr(&attrs, "server.address", entry.DomainName)
 	addAttr(&attrs, "server.socket.address", entry.TargetIP)
 	addIntAttr(&attrs, "server.socket.port", entry.TargetPort)
-	
+
 	// User agent
 	addAttr(&attrs, "user_agent.original", entry.UserAgent)
-	
+
 	// TLS attributes
 	addAttr(&attrs, "tls.cipher_suite", entry.SSLCipher)
 	addAttr(&attrs, "tls.protocol.version", entry.SSLProtocol)
-	
+
 	// AWS-specific attributes
 	addAttr(&attrs, "aws.alb.type", entry.Type)
 	addAttr(&attrs, "aws.lb.name", entry.ELB)
@@ -275,7 +275,7 @@ func buildAttributes(entry *parser.ALBLogEntry) []OTelAttribute {
 	addAttr(&attrs, "aws.alb.classification", entry.Classification)
 	addAttr(&attrs, "aws.alb.classification_reason", entry.ClassificationReason)
 	addAttr(&attrs, "aws.alb.conn_trace_id", entry.ConnTraceID)
-	
+
 	return attrs
 }
 
@@ -284,12 +284,12 @@ func convertTimestamp(timeStr string) int64 {
 	if timeStr == "" {
 		return time.Now().UnixNano()
 	}
-	
+
 	t, err := time.Parse("2006-01-02T15:04:05.999999Z", timeStr)
 	if err != nil {
 		return time.Now().UnixNano()
 	}
-	
+
 	return t.UnixNano()
 }
 
@@ -341,4 +341,115 @@ func addFloatAttr(attrs *[]OTelAttribute, key string, value float64) {
 			Value: floatValue(value),
 		})
 	}
+}
+
+// ConvertNLBToOTel converts NLB log entry to OTLP log record
+func ConvertNLBToOTel(entry *parser.NLBLogEntry) OTelLogRecord {
+	// Convert timestamp
+	timeUnixNano := convertTimestamp(entry.Time)
+
+	// Build attributes
+	attributes := buildAttributesNLB(entry)
+
+	// Determine severity (NLB doesn't have HTTP status codes usually, maybe check for errors?)
+	// Default to INFO
+	severityText := "INFO"
+	severityNumber := 9
+
+	// Build body
+	bodyContent := fmt.Sprintf("%s log for %s", entry.Type, entry.ELB)
+
+	// Generate trace and span IDs
+	// NLB doesn't have X-Amzn-Trace-Id in valid log fields usually, but sometimes has TraceID?
+	// Our struct doesn't have TraceID, but TLS logs might.
+	// For now, generate random TraceID/SpanID
+	traceID := generateTraceID()
+	spanID := generateSpanID()
+
+	return OTelLogRecord{
+		TimeUnixNano:   fmt.Sprintf("%d", timeUnixNano),
+		SeverityNumber: severityNumber,
+		SeverityText:   severityText,
+		Body:           map[string]string{"stringValue": bodyContent},
+		Attributes:     attributes,
+		TraceID:        traceID,
+		SpanID:         spanID,
+	}
+}
+
+func buildAttributesNLB(entry *parser.NLBLogEntry) []OTelAttribute {
+	attrs := []OTelAttribute{}
+
+	// Transport attributes
+	addAttr(&attrs, "network.transport", "tcp") // Mostly TCP for NLB
+	addAttr(&attrs, "network.protocol.name", entry.Type)
+	addAttr(&attrs, "network.protocol.version", entry.Version)
+
+	// Client attributes
+	addAttr(&attrs, "client.address", entry.ClientIP)
+	addIntAttr(&attrs, "client.port", entry.ClientPort)
+
+	// Server attributes
+	addAttr(&attrs, "server.address", entry.TargetIP)
+	addIntAttr(&attrs, "server.port", entry.TargetPort)
+
+	// TLS attributes
+	addAttr(&attrs, "tls.cipher_suite", entry.TLSCipher)
+	addAttr(&attrs, "tls.protocol.version", entry.TLSProtocolVersion)
+	addAttr(&attrs, "tls.server.name", entry.DomainName)
+
+	// AWS-specific attributes
+	addAttr(&attrs, "aws.nlb.type", entry.Type)
+	addAttr(&attrs, "aws.lb.name", entry.ELB)
+	addAttr(&attrs, "aws.nlb.listener_id", entry.ListenerID)
+	addFloatAttr(&attrs, "aws.nlb.connection_time", entry.ConnectionTime)
+	addFloatAttr(&attrs, "aws.nlb.tls_handshake_time", entry.TLSHandshakeTime)
+	addInt64Attr(&attrs, "aws.nlb.received_bytes", entry.ReceivedBytes)
+	addInt64Attr(&attrs, "aws.nlb.sent_bytes", entry.SentBytes)
+	addAttr(&attrs, "aws.nlb.incoming_tls_alert", entry.IncomingTLSAlert)
+	addAttr(&attrs, "aws.nlb.chosen_cert_arn", entry.ChosenCertARN)
+	addAttr(&attrs, "aws.nlb.chosen_cert_serial", entry.ChosenCertSerial)
+	addAttr(&attrs, "aws.nlb.tls_named_group", entry.TLSNamedGroup)
+	addAttr(&attrs, "aws.nlb.alpn_protocol", entry.ALPNProtocol)
+	addAttr(&attrs, "aws.nlb.alpn_client_preference_list", entry.ALPNClientPreferenceList)
+	addFloatAttr(&attrs, "aws.nlb.tls_handshake_time_ms", entry.TLSHandshakeTimeMS)
+
+	return attrs
+}
+
+// ExtractResourceAttributesNLB extracts cloud resource attributes from NLB entry
+func ExtractResourceAttributesNLB(entry *parser.NLBLogEntry) []OTelAttribute {
+	attrs := []OTelAttribute{
+		{Key: "cloud.provider", Value: stringValue("aws")},
+		{Key: "cloud.platform", Value: stringValue("aws_elastic_load_balancing")},
+		{Key: "service.name", Value: stringValue("nlb-log-parser")},
+	}
+
+	// Extract region and account from ARN (ListenerID usually contains full ARN)
+	// Example: listener/net/my-load-balancer/5d4...
+	// Or ChosenCertARN
+
+	arn := entry.ChosenCertARN
+
+	if arn != "" && arn != "-" {
+		parts := strings.Split(arn, ":")
+		if len(parts) >= 5 {
+			attrs = append(attrs,
+				OTelAttribute{Key: "cloud.region", Value: stringValue(parts[3])},
+				OTelAttribute{Key: "cloud.account.id", Value: stringValue(parts[4])},
+			)
+		}
+	}
+
+	return attrs
+}
+
+// generateTraceID generates a random 16-byte hex string (32 chars)
+func generateTraceID() string {
+	b := make([]byte, 16)
+	_, err := rand.Read(b)
+	if err != nil {
+		return fmt.Sprintf("%032x", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%x", b)
 }

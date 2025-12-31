@@ -3,7 +3,7 @@ package converter
 import (
 	"testing"
 
-	"github.com/pixelvide/otel-alb-log-parser/pkg/parser"
+	"github.com/pixelvide/otel-lb-log-parser/pkg/parser"
 )
 
 func TestParseTraceID(t *testing.T) {
@@ -49,10 +49,10 @@ func TestParseRequestURL(t *testing.T) {
 			name: "HTTPS URL with query",
 			url:  "https://example.com:443/api/test?foo=bar",
 			want: map[string]string{
-				"http.scheme":  "https",
-				"url.path":     "/api/test",
-				"url.query":    "foo=bar",
-				"http.target":  "/api/test?foo=bar",
+				"http.scheme": "https",
+				"url.path":    "/api/test",
+				"url.query":   "foo=bar",
+				"http.target": "/api/test?foo=bar",
 			},
 		},
 		{

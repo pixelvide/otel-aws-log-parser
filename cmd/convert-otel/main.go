@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/pixelvide/otel-alb-log-parser/pkg/converter"
-	"github.com/pixelvide/otel-alb-log-parser/pkg/parser"
+	"github.com/pixelvide/otel-lb-log-parser/pkg/converter"
+	"github.com/pixelvide/otel-lb-log-parser/pkg/parser"
 )
 
 func main() {
@@ -34,14 +34,14 @@ func main() {
 	for _, entry := range entries {
 		// Extract resource key (region + account)
 		resKey := getResourceKey(entry)
-		
+
 		if _, exists := grouped[resKey]; !exists {
 			grouped[resKey] = &resourceGroup{
 				ResourceAttrs: converter.ExtractResourceAttributes(entry),
 				LogRecords:    []converter.OTelLogRecord{},
 			}
 		}
-		
+
 		logRecord := converter.ConvertToOTel(entry)
 		grouped[resKey].LogRecords = append(grouped[resKey].LogRecords, logRecord)
 	}
@@ -71,7 +71,7 @@ func main() {
 	// Output as JSON
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
-	
+
 	if err := encoder.Encode(payload); err != nil {
 		fmt.Fprintf(os.Stderr, "Error encoding JSON: %v\n", err)
 		os.Exit(1)

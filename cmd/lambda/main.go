@@ -21,8 +21,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 
-	"github.com/pixelvide/otel-alb-log-parser/pkg/converter"
-	"github.com/pixelvide/otel-alb-log-parser/pkg/parser"
+	"github.com/pixelvide/otel-lb-log-parser/pkg/converter"
+	"github.com/pixelvide/otel-lb-log-parser/pkg/parser"
 )
 
 var (
@@ -56,6 +56,56 @@ func init() {
 	retryBaseSec = 1.0
 }
 
+// LogAdapter interface for polymorphic log handling
+type LogAdapter interface {
+	GetResourceKey() string
+	GetResourceAttributes() []converter.OTelAttribute
+	ToOTel() converter.OTelLogRecord
+}
+
+// ALBAdapter implementation
+type ALBAdapter struct {
+	*parser.ALBLogEntry
+}
+
+func (a ALBAdapter) GetResourceKey() string {
+	arn := a.ALBLogEntry.TargetGroupARN
+	if arn == "" || arn == "-" {
+		arn = a.ALBLogEntry.ChosenCertARN
+	}
+	return arn
+}
+
+func (a ALBAdapter) GetResourceAttributes() []converter.OTelAttribute {
+	return converter.ExtractResourceAttributes(a.ALBLogEntry)
+}
+
+func (a ALBAdapter) ToOTel() converter.OTelLogRecord {
+	return converter.ConvertToOTel(a.ALBLogEntry)
+}
+
+// NLBAdapter implementation
+type NLBAdapter struct {
+	*parser.NLBLogEntry
+}
+
+func (a NLBAdapter) GetResourceKey() string {
+	arn := a.NLBLogEntry.ChosenCertARN
+	if arn == "" || arn == "-" {
+		// Fallback to ListenerID or ELB name
+		arn = a.NLBLogEntry.ListenerID // often contains ARN
+	}
+	return arn
+}
+
+func (a NLBAdapter) GetResourceAttributes() []converter.OTelAttribute {
+	return converter.ExtractResourceAttributesNLB(a.NLBLogEntry)
+}
+
+func (a NLBAdapter) ToOTel() converter.OTelLogRecord {
+	return converter.ConvertNLBToOTel(a.NLBLogEntry)
+}
+
 func handler(ctx context.Context, s3Event events.S3Event) error {
 	logger.Info("Lambda triggered", "record_count", len(s3Event.Records))
 
@@ -66,8 +116,37 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 		log := logger.With("bucket", bucket, "key", key)
 		log.Info("Processing S3 object")
 
+		// Determine log type and parser
+		var parseFunc func(string) (LogAdapter, error)
+
+		// Check for NLB vs ALB based on file naming convention
+		// NLB: ..._net.load-balancer-id...
+		// ALB: ..._app.load-balancer-id...
+		if strings.Contains(key, "_net.") {
+			log.Info("Detected NLB log based on filename")
+			parseFunc = func(line string) (LogAdapter, error) {
+				entry, err := parser.ParseNLBLogLine(line)
+				if err != nil {
+					return nil, err
+				}
+				return NLBAdapter{entry}, nil
+			}
+		} else if strings.Contains(key, "_app.") {
+			log.Info("Detected ALB log based on filename")
+			parseFunc = func(line string) (LogAdapter, error) {
+				entry, err := parser.ParseLogLine(line)
+				if err != nil {
+					return nil, err
+				}
+				return ALBAdapter{entry}, nil
+			}
+		} else {
+			log.Info("Skipping object: filename pattern does not match _net. or _app.", "key", key)
+			continue
+		}
+
 		// Read and parse logs from S3
-		entries, err := readAndParseFromS3(bucket, key)
+		entries, err := readAndParseFromS3(bucket, key, parseFunc)
 		if err != nil {
 			log.Error("Error processing S3 object", "error", err)
 			return err
@@ -90,7 +169,7 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 	return nil
 }
 
-func readAndParseFromS3(bucket, key string) ([]*parser.ALBLogEntry, error) {
+func readAndParseFromS3(bucket, key string, parseFunc func(string) (LogAdapter, error)) ([]LogAdapter, error) {
 	// Get object from S3
 	result, err := s3Client.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(bucket),
@@ -115,11 +194,10 @@ func readAndParseFromS3(bucket, key string) ([]*parser.ALBLogEntry, error) {
 
 	// Create channels for parallel processing
 	linesChan := make(chan string, maxBatchSize)
-	entriesChan := make(chan *parser.ALBLogEntry, maxBatchSize)
+	entriesChan := make(chan LogAdapter, maxBatchSize)
 	var wg sync.WaitGroup
 
 	// Start workers
-	// Use maxConcurrent/2 for parsing to leave room for sending logic, or just use maxConcurrent
 	numWorkers := maxConcurrent
 	if numWorkers < 1 {
 		numWorkers = 1
@@ -133,7 +211,7 @@ func readAndParseFromS3(bucket, key string) ([]*parser.ALBLogEntry, error) {
 				if line == "" {
 					continue
 				}
-				entry, err := parser.ParseLogLine(line)
+				entry, err := parseFunc(line)
 				if err == nil && entry != nil {
 					entriesChan <- entry
 				}
@@ -144,10 +222,9 @@ func readAndParseFromS3(bucket, key string) ([]*parser.ALBLogEntry, error) {
 	// Start a goroutine to read lines and send to workers
 	go func() {
 		scanner := bufio.NewScanner(reader)
-		// Increase buffer size if needed, default is 64k which should be enough for log lines
-		// but ALB logs can be long. Let's use a larger buffer just in case.
+		// Increase buffer size
 		buf := make([]byte, 0, 64*1024)
-		scanner.Buffer(buf, 1024*1024) // 1MB max line size
+		scanner.Buffer(buf, 1024*1024)
 
 		for scanner.Scan() {
 			linesChan <- scanner.Text()
@@ -167,7 +244,7 @@ func readAndParseFromS3(bucket, key string) ([]*parser.ALBLogEntry, error) {
 	}()
 
 	// Collect results
-	entries := make([]*parser.ALBLogEntry, 0)
+	entries := make([]LogAdapter, 0)
 	for entry := range entriesChan {
 		entries = append(entries, entry)
 	}
@@ -176,25 +253,23 @@ func readAndParseFromS3(bucket, key string) ([]*parser.ALBLogEntry, error) {
 	return entries, nil
 }
 
-func convertAndSend(entries []*parser.ALBLogEntry) error {
+func convertAndSend(entries []LogAdapter) error {
 	// Group by resource
 	grouped := make(map[string]*resourceGroup)
 
 	for _, entry := range entries {
-		resKey := getResourceKey(entry)
+		resKey := entry.GetResourceKey()
 
 		if _, exists := grouped[resKey]; !exists {
 			grouped[resKey] = &resourceGroup{
-				ResourceAttrs: converter.ExtractResourceAttributes(entry),
+				ResourceAttrs: entry.GetResourceAttributes(),
 				LogRecords:    []converter.OTelLogRecord{},
 			}
 		}
 
-		logRecord := converter.ConvertToOTel(entry)
+		logRecord := entry.ToOTel()
 		grouped[resKey].LogRecords = append(grouped[resKey].LogRecords, logRecord)
 	}
-
-	logger.Info("Grouped logs", "resource_group_count", len(grouped))
 
 	logger.Info("Grouped logs", "resource_group_count", len(grouped))
 
@@ -348,14 +423,6 @@ func sendWithRetry(payload converter.OTLPPayload) error {
 type resourceGroup struct {
 	ResourceAttrs []converter.OTelAttribute
 	LogRecords    []converter.OTelLogRecord
-}
-
-func getResourceKey(entry *parser.ALBLogEntry) string {
-	arn := entry.TargetGroupARN
-	if arn == "" || arn == "-" {
-		arn = entry.ChosenCertARN
-	}
-	return arn
 }
 
 func getEnv(key, defaultValue string) string {

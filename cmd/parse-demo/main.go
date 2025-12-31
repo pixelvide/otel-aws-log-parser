@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/pixelvide/otel-alb-log-parser/pkg/parser"
+	"github.com/pixelvide/otel-lb-log-parser/pkg/parser"
 )
 
 func main() {
@@ -30,7 +30,7 @@ func main() {
 	// Output entries as JSON
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
-	
+
 	if err := encoder.Encode(entries); err != nil {
 		fmt.Fprintf(os.Stderr, "Error encoding JSON: %v\n", err)
 		os.Exit(1)

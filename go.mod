@@ -1,4 +1,4 @@
-module github.com/pixelvide/otel-alb-log-parser
+module github.com/pixelvide/otel-lb-log-parser
 
 go 1.21
 
