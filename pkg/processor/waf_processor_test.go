@@ -51,8 +51,8 @@ func TestWAFProcessor_Matches(t *testing.T) {
 }
 
 func TestWAFAdapter_GetResourceAttributes(t *testing.T) {
-	// ARN provided by user
-	arn := "arn:aws:wafv2:ap-south-1:545734669840:regional/webacl/IFMISTS-PRD/99bcabef-913f-42e5-a2b9-04025488897d"
+	// ARN provided by user (anonymized)
+	arn := "arn:aws:wafv2:ap-south-1:123456789012:regional/webacl/TEST-WEBACL/11111111-2222-3333-4444-555555555555"
 
 	entry := &parser.WAFLogEntry{
 		WebACLID: arn,
@@ -78,7 +78,7 @@ func TestWAFAdapter_GetResourceAttributes(t *testing.T) {
 		"cloud.provider":     "aws",
 		"cloud.platform":     "aws_waf",
 		"cloud.service":      "waf",
-		"cloud.account.id":   "545734669840",
+		"cloud.account.id":   "123456789012",
 		"cloud.region":       "ap-south-1",
 		"aws.waf.web_acl_id": arn,
 	}
