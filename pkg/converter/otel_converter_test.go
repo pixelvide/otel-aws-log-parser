@@ -230,4 +230,11 @@ func TestConvertWAFToOTel_ProcessedRules(t *testing.T) {
 	if r, ok := ruleMap["GroupNonTerminatingRule"]; !ok || r.Type != "GROUP_NON_TERMINATING" {
 		t.Error("GroupNonTerminatingRule missing or incorrect type")
 	}
+
+	// Verify that cloud.* attributes are NOT present (should be in Resource, not Log Record)
+	for _, attr := range record.Attributes {
+		if attr.Key == "cloud.provider" || attr.Key == "cloud.platform" || attr.Key == "service.name" {
+			t.Errorf("Found unexpected attribute in Log Record: %s", attr.Key)
+		}
+	}
 }

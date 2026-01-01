@@ -515,29 +515,6 @@ func buildAttributesWAF(entry *parser.WAFLogEntry) []OTelAttribute {
 		}
 	}
 
-	// Parse WebACLID for region and account
-	// ARN formats:
-	// arn:aws:wafv2:region:account:regional/webacl/name/id
-	// arn:aws:wafv2::account:global/webacl/name/id (CloudFront)
-	if entry.WebACLID != "" {
-		parts := strings.Split(entry.WebACLID, ":")
-		if len(parts) >= 6 {
-			// Region is parts[3] (can be empty for global)
-			region := parts[3]
-			if region == "" {
-				region = "global"
-			}
-			account := parts[4]
-
-			addAttr(&attrs, "cloud.region", region)
-			addAttr(&attrs, "cloud.account.id", account)
-		}
-	}
-
-	addAttr(&attrs, "cloud.provider", "aws")
-	addAttr(&attrs, "cloud.platform", "aws_waf")
-	addAttr(&attrs, "service.name", "waf-log-parser")
-
 	// Collect all processed rules
 	processedRules := collectProcessedRules(entry)
 	if len(processedRules) > 0 {

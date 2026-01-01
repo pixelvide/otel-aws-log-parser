@@ -38,6 +38,9 @@ func (p *WAFProcessor) Process(ctx context.Context, logger *slog.Logger, s3Clien
 	// But I checked the history, and I only *planned* streaming refactor in Step 714, but didn't implement it yet.
 	// So I will stick to the temp file approach for now to match current main.go behavior.
 
+	// Extract common attributes from S3 key
+	accountID, region := ParseRegionAccountFromS3Key(key)
+
 	result, err := s3Client.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
@@ -68,7 +71,11 @@ func (p *WAFProcessor) Process(ctx context.Context, logger *slog.Logger, s3Clien
 
 	adapters := make([]adapter.LogAdapter, len(wafEntries))
 	for i, e := range wafEntries {
-		adapters[i] = WAFAdapter{e}
+		adapters[i] = &WAFAdapter{
+			WAFLogEntry: e,
+			AccountID:   accountID,
+			Region:      region,
+		}
 	}
 	return adapters, nil
 }
@@ -76,22 +83,59 @@ func (p *WAFProcessor) Process(ctx context.Context, logger *slog.Logger, s3Clien
 // WAFAdapter implementation
 type WAFAdapter struct {
 	*parser.WAFLogEntry
+	AccountID string
+	Region    string
 }
 
-func (a WAFAdapter) GetResourceKey() string {
+func (a *WAFAdapter) GetResourceKey() string {
 	return a.WAFLogEntry.WebACLID
 }
 
-func (a WAFAdapter) GetResourceAttributes() []converter.OTelAttribute {
+func (a *WAFAdapter) GetResourceAttributes() []converter.OTelAttribute {
 	attrs := []converter.OTelAttribute{
 		{Key: "cloud.provider", Value: converter.OTelAnyValue{StringValue: aws.String("aws")}},
 		{Key: "cloud.platform", Value: converter.OTelAnyValue{StringValue: aws.String("aws_waf")}},
 		{Key: "cloud.service", Value: converter.OTelAnyValue{StringValue: aws.String("waf")}},
 		{Key: "aws.waf.web_acl_id", Value: converter.OTelAnyValue{StringValue: aws.String(a.WAFLogEntry.WebACLID)}},
 	}
+
+	// Try extracting from WebACLID
+	extractedAccount := ""
+	extractedRegion := ""
+
+	if a.WAFLogEntry.WebACLID != "" {
+		parts := strings.Split(a.WAFLogEntry.WebACLID, ":")
+		if len(parts) >= 6 {
+			// Region is parts[3] (can be empty for global)
+			extractedRegion = parts[3]
+			if extractedRegion == "" {
+				extractedRegion = "global"
+			}
+			extractedAccount = parts[4]
+		}
+	}
+
+	// Use extracted values, fallback to S3 context
+	finalAccount := extractedAccount
+	if finalAccount == "" {
+		finalAccount = a.AccountID
+	}
+
+	finalRegion := extractedRegion
+	if finalRegion == "" {
+		finalRegion = a.Region
+	}
+
+	if finalAccount != "" {
+		attrs = append(attrs, converter.OTelAttribute{Key: "cloud.account.id", Value: converter.OTelAnyValue{StringValue: &finalAccount}})
+	}
+	if finalRegion != "" {
+		attrs = append(attrs, converter.OTelAttribute{Key: "cloud.region", Value: converter.OTelAnyValue{StringValue: &finalRegion}})
+	}
+
 	return attrs
 }
 
-func (a WAFAdapter) ToOTel() converter.OTelLogRecord {
+func (a *WAFAdapter) ToOTel() converter.OTelLogRecord {
 	return converter.ConvertWAFToOTel(a.WAFLogEntry)
 }

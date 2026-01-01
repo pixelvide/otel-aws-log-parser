@@ -2,6 +2,8 @@ package processor
 
 import (
 	"testing"
+
+	"github.com/pixelvide/otel-aws-log-parser/pkg/parser"
 )
 
 func TestWAFProcessor_Matches(t *testing.T) {
@@ -45,5 +47,45 @@ func TestWAFProcessor_Matches(t *testing.T) {
 				t.Errorf("WAFProcessor.Matches() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestWAFAdapter_GetResourceAttributes(t *testing.T) {
+	// ARN provided by user
+	arn := "arn:aws:wafv2:ap-south-1:545734669840:regional/webacl/IFMISTS-PRD/99bcabef-913f-42e5-a2b9-04025488897d"
+
+	entry := &parser.WAFLogEntry{
+		WebACLID: arn,
+	}
+
+	// Create adapter without S3 fallback initially to test ARN parsing
+	adapter := &WAFAdapter{
+		WAFLogEntry: entry,
+		AccountID:   "",
+		Region:      "",
+	}
+
+	attrs := adapter.GetResourceAttributes()
+
+	attrMap := make(map[string]string)
+	for _, a := range attrs {
+		if a.Value.StringValue != nil {
+			attrMap[a.Key] = *a.Value.StringValue
+		}
+	}
+
+	expected := map[string]string{
+		"cloud.provider":     "aws",
+		"cloud.platform":     "aws_waf",
+		"cloud.service":      "waf",
+		"cloud.account.id":   "545734669840",
+		"cloud.region":       "ap-south-1",
+		"aws.waf.web_acl_id": arn,
+	}
+
+	for k, v := range expected {
+		if got, ok := attrMap[k]; !ok || got != v {
+			t.Errorf("Attribute %q = %q, want %q", k, got, v)
+		}
 	}
 }

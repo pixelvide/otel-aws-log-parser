@@ -25,18 +25,27 @@ func (p *ALBProcessor) Matches(bucket, key string) bool {
 }
 
 func (p *ALBProcessor) Process(ctx context.Context, logger *slog.Logger, s3Client *s3.S3, bucket, key string) ([]adapter.LogAdapter, error) {
+	// Extract common attributes from S3 key
+	accountID, region := ParseRegionAccountFromS3Key(key)
+
 	return ReadAndParseFromS3(logger, s3Client, bucket, key, p.MaxBatchSize, p.MaxConcurrent, func(line string) (adapter.LogAdapter, error) {
 		entry, err := parser.ParseLogLine(line)
 		if err != nil {
 			return nil, err
 		}
-		return ALBAdapter{entry}, nil
+		return ALBAdapter{
+			ALBLogEntry: entry,
+			AccountID:   accountID,
+			Region:      region,
+		}, nil
 	})
 }
 
 // ALBAdapter implementation
 type ALBAdapter struct {
 	*parser.ALBLogEntry
+	AccountID string
+	Region    string
 }
 
 func (a ALBAdapter) GetResourceKey() string {
@@ -48,7 +57,28 @@ func (a ALBAdapter) GetResourceKey() string {
 }
 
 func (a ALBAdapter) GetResourceAttributes() []converter.OTelAttribute {
-	return converter.ExtractResourceAttributes(a.ALBLogEntry)
+	attrs := converter.ExtractResourceAttributes(a.ALBLogEntry)
+
+	// Check if cloud attributes are missing and fill from S3 key context
+	hasAccount := false
+	hasRegion := false
+	for _, attr := range attrs {
+		if attr.Key == "cloud.account.id" {
+			hasAccount = true
+		}
+		if attr.Key == "cloud.region" {
+			hasRegion = true
+		}
+	}
+
+	if !hasAccount && a.AccountID != "" {
+		attrs = append(attrs, converter.OTelAttribute{Key: "cloud.account.id", Value: converter.OTelAnyValue{StringValue: &a.AccountID}})
+	}
+	if !hasRegion && a.Region != "" {
+		attrs = append(attrs, converter.OTelAttribute{Key: "cloud.region", Value: converter.OTelAnyValue{StringValue: &a.Region}})
+	}
+
+	return attrs
 }
 
 func (a ALBAdapter) ToOTel() converter.OTelLogRecord {
