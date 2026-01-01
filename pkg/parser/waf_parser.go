@@ -27,6 +27,10 @@ type WAFLogEntry struct {
 	ResponseCodeSent            *int                 `json:"responseCodeSent"`
 	HTTPRequest                 HTTPRequest          `json:"httpRequest"`
 	Labels                      []Label              `json:"labels"`
+	RequestBodySize             int64                `json:"requestBodySize"`
+	RequestBodySizeInspected    int64                `json:"requestBodySizeInspectedByWAF"`
+	JA3Fingerprint              string               `json:"ja3Fingerprint"`
+	JA4Fingerprint              string               `json:"ja4Fingerprint"`
 }
 
 type MatchDetail struct {

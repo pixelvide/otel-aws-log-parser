@@ -137,6 +137,7 @@ func ExtractResourceAttributes(entry *parser.ALBLogEntry) []OTelAttribute {
 		{Key: "cloud.provider", Value: stringValue("aws")},
 		{Key: "cloud.platform", Value: stringValue("aws_elastic_load_balancing")},
 		{Key: "service.name", Value: stringValue("alb-log-parser")},
+		{Key: "aws.lb.name", Value: stringValue(entry.ELB)},
 	}
 
 	// Extract region and account from ARN
@@ -258,7 +259,6 @@ func buildAttributes(entry *parser.ALBLogEntry) []OTelAttribute {
 
 	// AWS-specific attributes
 	addAttr(&attrs, "aws.alb.type", entry.Type)
-	addAttr(&attrs, "aws.lb.name", entry.ELB)
 	addFloatAttr(&attrs, "aws.alb.request_processing_time", entry.RequestProcessingTime)
 	addFloatAttr(&attrs, "aws.alb.target_processing_time", entry.TargetProcessingTime)
 	addFloatAttr(&attrs, "aws.alb.response_processing_time", entry.ResponseProcessingTime)
@@ -401,7 +401,6 @@ func buildAttributesNLB(entry *parser.NLBLogEntry) []OTelAttribute {
 
 	// AWS-specific attributes
 	addAttr(&attrs, "aws.nlb.type", entry.Type)
-	addAttr(&attrs, "aws.lb.name", entry.ELB)
 	addAttr(&attrs, "aws.nlb.listener_id", entry.ListenerID)
 	addFloatAttr(&attrs, "aws.nlb.connection_time", entry.ConnectionTime)
 	addFloatAttr(&attrs, "aws.nlb.tls_handshake_time", entry.TLSHandshakeTime)
@@ -425,6 +424,7 @@ func ExtractResourceAttributesNLB(entry *parser.NLBLogEntry) []OTelAttribute {
 		{Key: "cloud.provider", Value: stringValue("aws")},
 		{Key: "cloud.platform", Value: stringValue("aws_elastic_load_balancing")},
 		{Key: "service.name", Value: stringValue("nlb-log-parser")},
+		{Key: "aws.lb.name", Value: stringValue(entry.ELB)},
 	}
 
 	// Extract region and account from ARN (ListenerID usually contains full ARN)
@@ -472,7 +472,24 @@ func ConvertWAFToOTel(entry *parser.WAFLogEntry) OTelLogRecord {
 
 	bodyContent := fmt.Sprintf("%s %s %s", entry.HTTPRequest.HTTPMethod, entry.HTTPRequest.URI, entry.Action)
 
-	traceID := generateTraceID()
+	traceID := ""
+	// Try to extract Trace ID from headers
+	for _, h := range entry.HTTPRequest.Headers {
+		if strings.EqualFold(h.Name, "X-Amzn-Trace-Id") {
+			traceID = ParseTraceID(h.Value)
+			break
+		}
+	}
+
+	// Fallback to RequestID if it matches Trace ID format
+	if traceID == "" && entry.HTTPRequest.RequestID != "" {
+		traceID = ParseTraceID(entry.HTTPRequest.RequestID)
+	}
+
+	if traceID == "" {
+		traceID = generateTraceID()
+	}
+
 	spanID := generateSpanID()
 
 	return OTelLogRecord{
@@ -513,6 +530,26 @@ func buildAttributesWAF(entry *parser.WAFLogEntry) []OTelAttribute {
 		if strings.EqualFold(h.Name, "Host") {
 			addAttr(&attrs, "server.address", h.Value)
 		}
+	}
+
+	// Additional Details
+	addAttr(&attrs, "client.geo.country_iso_code", req.Country)
+	addInt64Attr(&attrs, "http.request.body.size", entry.RequestBodySize)
+	addInt64Attr(&attrs, "aws.waf.request_body_size_inspected", entry.RequestBodySizeInspected)
+	addAttr(&attrs, "tls.client.ja3", entry.JA3Fingerprint)
+	addAttr(&attrs, "tls.client.ja4", entry.JA4Fingerprint)
+
+	if len(entry.Labels) > 0 {
+		var labels []string
+		for _, l := range entry.Labels {
+			labels = append(labels, l.Name)
+		}
+		// JSON encode string array for easier querying in some backends,
+		// otherwise we could use array value if OTel library fully supported it easily here.
+		// For simplicity/compatibility, joining with comma or JSON string is often used.
+		// Using JSON for robust array representation.
+		lblBytes, _ := json.Marshal(labels)
+		addAttr(&attrs, "aws.waf.labels", string(lblBytes))
 	}
 
 	// Collect all processed rules

@@ -133,31 +133,58 @@ func TestConvertToOTel(t *testing.T) {
 	if !foundMethod {
 		t.Error("http.request.method attribute not found or incorrect")
 	}
+
+	// Verify aws.alb.response_processing_time
+	foundRespTime := false
+	for _, attr := range record.Attributes {
+		if attr.Key == "aws.alb.response_processing_time" && attr.Value.DoubleValue != nil && *attr.Value.DoubleValue == 0.001 {
+			foundRespTime = true
+			break
+		}
+	}
+	if !foundRespTime {
+		t.Error("aws.alb.response_processing_time attribute not found or incorrect")
+	}
+
+	// Verify aws.lb.name is NOT present (moved to Resource)
+	for _, attr := range record.Attributes {
+		if attr.Key == "aws.lb.name" {
+			t.Error("Found unexpected attribute in Log Record: aws.lb.name")
+		}
+	}
 }
 
 func TestExtractResourceAttributes(t *testing.T) {
 	entry := &parser.ALBLogEntry{
 		TargetGroupARN: "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/test/abc",
+		ELB:            "my-load-balancer",
 	}
 
 	attrs := ExtractResourceAttributes(entry)
 
-	// Verify we have at least base attributes
-	if len(attrs) < 3 {
-		t.Errorf("Expected at least 3 resource attributes, got %d", len(attrs))
+	// Verify we have at least base attributes + lb name + cloud attributes
+	// Provider, Platform, Service, LBName, Region, Account = 6
+	if len(attrs) < 6 {
+		t.Errorf("Expected at least 6 resource attributes, got %d", len(attrs))
 	}
 
 	// Verify cloud.provider exists
 	foundProvider := false
+	foundLBName := false
 	for _, attr := range attrs {
 		if attr.Key == "cloud.provider" && attr.Value.StringValue != nil && *attr.Value.StringValue == "aws" {
 			foundProvider = true
-			break
+		}
+		if attr.Key == "aws.lb.name" && attr.Value.StringValue != nil && *attr.Value.StringValue == "my-load-balancer" {
+			foundLBName = true
 		}
 	}
 
 	if !foundProvider {
 		t.Error("cloud.provider attribute not found")
+	}
+	if !foundLBName {
+		t.Error("aws.lb.name attribute not found in Resource Attributes")
 	}
 }
 
@@ -180,10 +207,46 @@ func TestConvertWAFToOTel_ProcessedRules(t *testing.T) {
 		HTTPRequest: parser.HTTPRequest{
 			HTTPMethod: "GET",
 			URI:        "/",
+			RequestID:  "1-58337262-36d228ad5d99923122bbe354",
+			Country:    "IN",
+			Headers: []parser.Header{
+				{Name: "Host", Value: "example.com"},
+			},
 		},
+		Labels:                   []parser.Label{{Name: "awswaf:clientip:geo:country:IN"}},
+		RequestBodySize:          21,
+		RequestBodySizeInspected: 21,
+		JA3Fingerprint:           "f79b6bad2ad0641e1921aef10262856b",
+		JA4Fingerprint:           "t13d1513h2_8daaf6152771_eca864cca44a",
 	}
 
 	record := ConvertWAFToOTel(entry)
+
+	// Verify TraceID is extracted correctly from RequestID
+	if record.TraceID != "5833726236d228ad5d99923122bbe354" {
+		t.Errorf("TraceID = %q, want 5833726236d228ad5d99923122bbe354", record.TraceID)
+	}
+
+	// Verify new attributes
+	expectedAttrs := map[string]string{
+		"client.geo.country_iso_code": "IN",
+		"aws.waf.labels":              `["awswaf:clientip:geo:country:IN"]`,
+		"tls.client.ja3":              "f79b6bad2ad0641e1921aef10262856b",
+		"tls.client.ja4":              "t13d1513h2_8daaf6152771_eca864cca44a",
+	}
+
+	for k, v := range expectedAttrs {
+		found := false
+		for _, attr := range record.Attributes {
+			if attr.Key == k && attr.Value.StringValue != nil && *attr.Value.StringValue == v {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Attribute %q = %q not found", k, v)
+		}
+	}
 
 	var processedRulesAttr *OTelAttribute
 	for _, attr := range record.Attributes {
