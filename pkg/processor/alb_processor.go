@@ -6,9 +6,9 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/pixelvide/otel-lb-log-parser/cmd/lambda/adapter"
-	"github.com/pixelvide/otel-lb-log-parser/pkg/converter"
-	"github.com/pixelvide/otel-lb-log-parser/pkg/parser"
+	"github.com/pixelvide/otel-aws-log-parser/cmd/lambda/adapter"
+	"github.com/pixelvide/otel-aws-log-parser/pkg/converter"
+	"github.com/pixelvide/otel-aws-log-parser/pkg/parser"
 )
 
 type ALBProcessor struct {

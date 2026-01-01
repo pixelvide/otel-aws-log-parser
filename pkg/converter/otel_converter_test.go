@@ -3,7 +3,7 @@ package converter
 import (
 	"testing"
 
-	"github.com/pixelvide/otel-lb-log-parser/pkg/parser"
+	"github.com/pixelvide/otel-aws-log-parser/pkg/parser"
 )
 
 func TestParseTraceID(t *testing.T) {

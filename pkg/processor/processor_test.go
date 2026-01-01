@@ -3,7 +3,7 @@ package processor_test
 import (
 	"testing"
 
-	"github.com/pixelvide/otel-lb-log-parser/pkg/processor"
+	"github.com/pixelvide/otel-aws-log-parser/pkg/processor"
 )
 
 func TestProcessorMatching(t *testing.T) {

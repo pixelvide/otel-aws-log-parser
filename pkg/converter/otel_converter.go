@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pixelvide/otel-lb-log-parser/pkg/parser"
+	"github.com/pixelvide/otel-aws-log-parser/pkg/parser"
 )
 
 // OTelLogRecord represents an OpenTelemetry log record

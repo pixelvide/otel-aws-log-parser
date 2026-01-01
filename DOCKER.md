@@ -4,7 +4,7 @@
 
 ### 1. Build the Docker Image
 ```bash
-cd go-alb-processor
+cd otel-aws-log-parser
 docker build -t alb-processor:latest .
 ```
 
@@ -157,6 +157,7 @@ cat output.json
 | `BASIC_AUTH_PASSWORD` | Optional basic auth password | - |
 | `MAX_BATCH_SIZE` | Max logs per batch | `500` |
 | `MAX_RETRIES` | HTTP retry attempts | `3` |
+| `MAX_CONCURRENT` | Max concurrent batch processing | `10` |
 
 ## Troubleshooting
 

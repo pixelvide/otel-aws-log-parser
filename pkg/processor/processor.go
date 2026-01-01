@@ -5,7 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/pixelvide/otel-lb-log-parser/cmd/lambda/adapter"
+	"github.com/pixelvide/otel-aws-log-parser/cmd/lambda/adapter"
 )
 
 // LogProcessor defines the interface for processing different log types

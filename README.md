@@ -1,30 +1,36 @@
 # AWS LB Log to OTel Processor
 
-High-performance Golang implementation of ALB log processing to OpenTelemetry format.
+High-performance Golang implementation of AWS Load Balancer (ALB), Network Load Balancer (NLB), and WAF log processing to OpenTelemetry format.
 
 ## Project Structure
 
 ```
-otel-lb-log-parser/
+otel-aws-log-parser/
 ├── go.mod                    # Go module definition
 ├── cmd/
-│   ├── parse-demo/          # CLI: Parse ALB logs to JSON
-│   ├── convert-otel/        # CLI: Convert ALB logs to OTLP
+│   ├── parse-demo/          # CLI: Parse logs to JSON
+│   ├── convert-otel/        # CLI: Convert logs to OTLP
 │   └── lambda/              # AWS Lambda handler
 ├── pkg/
-│   ├── parser/              # ALB log parser
+│   ├── parser/              # Log parsers
 │   │   ├── alb_parser.go
-│   │   └── alb_parser_test.go
+│   │   ├── nlb_parser.go
+│   │   └── waf_parser.go
 │   └── converter/           # OTLP converter
 │       ├── otel_converter.go
 │       └── otel_converter_test.go
+├── pkg/
+│   └── processor/           # Log processors
+│       ├── alb_processor.go
+│       ├── nlb_processor.go
+│       └── waf_processor.go
 └── README.md
 ```
 
 ## Building
 
 ```bash
-cd otel-lb-log-parser
+cd otel-aws-log-parser
 
 # Download dependencies
 go mod download
@@ -84,6 +90,7 @@ BASIC_AUTH_USERNAME=optional
 BASIC_AUTH_PASSWORD=optional
 MAX_BATCH_SIZE=500
 MAX_RETRIES=3
+MAX_CONCURRENT=10
 ```
 
 ### Deploy
@@ -129,6 +136,11 @@ aws lambda add-permission \
 - W3C trace ID parsing
 - URL parsing for HTTP attributes
 - Severity mapping based on status codes
+
+✅ **Multiple Log Types**
+- **ALB Logs**: Standard access logs with full field support
+- **NLB Logs**: Network Load Balancer connection logs
+- **WAF Logs**: Web Application Firewall logs with rule matching details
 
 ✅ **Lambda Handler**
 - S3 event trigger support

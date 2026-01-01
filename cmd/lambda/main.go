@@ -18,9 +18,9 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 
-	"github.com/pixelvide/otel-lb-log-parser/cmd/lambda/adapter"
-	"github.com/pixelvide/otel-lb-log-parser/pkg/converter"
-	"github.com/pixelvide/otel-lb-log-parser/pkg/processor"
+	"github.com/pixelvide/otel-aws-log-parser/cmd/lambda/adapter"
+	"github.com/pixelvide/otel-aws-log-parser/pkg/converter"
+	"github.com/pixelvide/otel-aws-log-parser/pkg/processor"
 )
 
 var (
@@ -61,12 +61,23 @@ func init() {
 	registry.Register(&processor.WAFProcessor{})
 }
 
-func handler(ctx context.Context, s3Event events.S3Event) error {
-	logger.Info("Lambda triggered", "record_count", len(s3Event.Records))
+func handler(ctx context.Context, rawEvent json.RawMessage) error {
+	s3Records, err := extractS3Records(logger, rawEvent)
+	if err != nil {
+		logger.Error("Failed to extract S3 records", "error", err)
+		return err
+	}
 
-	for _, record := range s3Event.Records {
+	logger.Info("Lambda triggered", "record_count", len(s3Records))
+
+	for _, record := range s3Records {
 		bucket := record.S3.Bucket.Name
 		key := record.S3.Object.Key
+
+		if bucket == "" || key == "" {
+			logger.Warn("Skipping record with empty bucket or key")
+			continue
+		}
 
 		log := logger.With("bucket", bucket, "key", key)
 		log.Info("Processing S3 object")
@@ -102,6 +113,100 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 	}
 
 	return nil
+}
+
+func extractS3Records(logger *slog.Logger, raw []byte) ([]events.S3EventRecord, error) {
+	var s3Records []events.S3EventRecord
+
+	// 1. Try Direct S3 Event
+	var s3Event events.S3Event
+	if err := json.Unmarshal(raw, &s3Event); err == nil && len(s3Event.Records) > 0 {
+		if s3Event.Records[0].EventSource == "aws:s3" || s3Event.Records[0].S3.Bucket.Name != "" {
+			logger.Info("Detected direct S3 event")
+			return s3Event.Records, nil
+		}
+	}
+
+	// 2. Try SQS Event
+	var sqsEvent events.SQSEvent
+	if err := json.Unmarshal(raw, &sqsEvent); err == nil && len(sqsEvent.Records) > 0 {
+		if sqsEvent.Records[0].Body != "" {
+			logger.Info("Detected SQS event", "count", len(sqsEvent.Records))
+			for _, record := range sqsEvent.Records {
+				recs, err := parseBodyAsS3(logger, []byte(record.Body))
+				if err != nil {
+					logger.Warn("Failed to parse SQS body", "error", err)
+					continue
+				}
+				s3Records = append(s3Records, recs...)
+			}
+			if len(s3Records) > 0 {
+				return s3Records, nil
+			}
+		}
+	}
+
+	// 3. Try SNS Event
+	var snsEvent events.SNSEvent
+	if err := json.Unmarshal(raw, &snsEvent); err == nil && len(snsEvent.Records) > 0 {
+		if snsEvent.Records[0].SNS.Message != "" {
+			logger.Info("Detected SNS event")
+			for _, record := range snsEvent.Records {
+				recs, err := parseBodyAsS3(logger, []byte(record.SNS.Message))
+				if err != nil {
+					logger.Warn("Failed to parse SNS message", "error", err)
+					continue
+				}
+				s3Records = append(s3Records, recs...)
+			}
+			if len(s3Records) > 0 {
+				return s3Records, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("unknown event type or no valid records found")
+}
+
+func parseBodyAsS3(logger *slog.Logger, body []byte) ([]events.S3EventRecord, error) {
+	// Try Standard S3 Event
+	var s3Event events.S3Event
+	if err := json.Unmarshal(body, &s3Event); err == nil && len(s3Event.Records) > 0 {
+		if s3Event.Records[0].S3.Bucket.Name != "" {
+			return s3Event.Records, nil
+		}
+	}
+
+	// Try EventBridge S3 Event (common in SQS)
+	var ebEvent EventBridgeS3Event
+	if err := json.Unmarshal(body, &ebEvent); err == nil {
+		if ebEvent.Source == "aws.s3" && ebEvent.Detail.Bucket.Name != "" {
+			return []events.S3EventRecord{{
+				S3: events.S3Entity{
+					Bucket: events.S3Bucket{Name: ebEvent.Detail.Bucket.Name},
+					Object: events.S3Object{Key: ebEvent.Detail.Object.Key},
+				},
+				AWSRegion: ebEvent.Region,
+			}}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("body does not match known S3 event formats")
+}
+
+// EventBridgeS3Event structure for S3 events via EventBridge
+type EventBridgeS3Event struct {
+	Source     string `json:"source"`
+	DetailType string `json:"detail-type"`
+	Region     string `json:"region"`
+	Detail     struct {
+		Bucket struct {
+			Name string `json:"name"`
+		} `json:"bucket"`
+		Object struct {
+			Key string `json:"key"`
+		} `json:"object"`
+	} `json:"detail"`
 }
 
 func convertAndSend(entries []adapter.LogAdapter) error {

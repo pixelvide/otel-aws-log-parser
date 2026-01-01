@@ -11,7 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/pixelvide/otel-lb-log-parser/cmd/lambda/adapter"
+	"github.com/pixelvide/otel-aws-log-parser/cmd/lambda/adapter"
 )
 
 // ProcessLineFunc is a function that processes a single log line
