@@ -1,6 +1,7 @@
 package converter
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/pixelvide/otel-aws-log-parser/pkg/parser"
@@ -157,5 +158,76 @@ func TestExtractResourceAttributes(t *testing.T) {
 
 	if !foundProvider {
 		t.Error("cloud.provider attribute not found")
+	}
+}
+
+func TestConvertWAFToOTel_ProcessedRules(t *testing.T) {
+	entry := &parser.WAFLogEntry{
+		Timestamp:         1609459200000,
+		Action:            "BLOCK",
+		TerminatingRuleID: "TerminatingRule",
+		NonTerminatingMatchingRules: []parser.NonTerminatingRule{
+			{RuleID: "NonTerminatingRule1", Action: "COUNT"},
+		},
+		RuleGroupList: []parser.RuleGroup{
+			{
+				TerminatingRule: &parser.RuleGroupRule{RuleID: "GroupTerminatingRule", Action: "BLOCK"},
+				NonTerminatingRules: []parser.RuleGroupRule{
+					{RuleID: "GroupNonTerminatingRule", Action: "COUNT"},
+				},
+			},
+		},
+		HTTPRequest: parser.HTTPRequest{
+			HTTPMethod: "GET",
+			URI:        "/",
+		},
+	}
+
+	record := ConvertWAFToOTel(entry)
+
+	var processedRulesAttr *OTelAttribute
+	for _, attr := range record.Attributes {
+		if attr.Key == "aws.waf.processed_rules" {
+			processedRulesAttr = &attr
+			break
+		}
+	}
+
+	if processedRulesAttr == nil {
+		t.Fatal("aws.waf.processed_rules attribute not found")
+	}
+
+	if processedRulesAttr.Value.StringValue == nil {
+		t.Fatal("aws.waf.processed_rules value is nil")
+	}
+
+	jsonValue := *processedRulesAttr.Value.StringValue
+	var rules []ProcessedRule
+	if err := json.Unmarshal([]byte(jsonValue), &rules); err != nil {
+		t.Fatalf("Failed to unmarshal processed rules JSON: %v", err)
+	}
+
+	// Expect 4 rules: 1 Terminating + 1 NonTerminating + 1 GroupTerminating + 1 GroupNonTerminating
+	if len(rules) != 4 {
+		t.Errorf("Expected 4 processed rules, got %d", len(rules))
+	}
+
+	// Verify specific rule presence
+	ruleMap := make(map[string]ProcessedRule)
+	for _, r := range rules {
+		ruleMap[r.RuleID] = r
+	}
+
+	if r, ok := ruleMap["TerminatingRule"]; !ok || r.Type != "TERMINATING" {
+		t.Error("TerminatingRule missing or incorrect type")
+	}
+	if r, ok := ruleMap["NonTerminatingRule1"]; !ok || r.Type != "NON_TERMINATING" {
+		t.Error("NonTerminatingRule1 missing or incorrect type")
+	}
+	if r, ok := ruleMap["GroupTerminatingRule"]; !ok || r.Type != "GROUP_TERMINATING" {
+		t.Error("GroupTerminatingRule missing or incorrect type")
+	}
+	if r, ok := ruleMap["GroupNonTerminatingRule"]; !ok || r.Type != "GROUP_NON_TERMINATING" {
+		t.Error("GroupNonTerminatingRule missing or incorrect type")
 	}
 }

@@ -2,6 +2,7 @@ package converter
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -537,5 +538,63 @@ func buildAttributesWAF(entry *parser.WAFLogEntry) []OTelAttribute {
 	addAttr(&attrs, "cloud.platform", "aws_waf")
 	addAttr(&attrs, "service.name", "waf-log-parser")
 
+	// Collect all processed rules
+	processedRules := collectProcessedRules(entry)
+	if len(processedRules) > 0 {
+		jsonBytes, err := json.Marshal(processedRules)
+		if err == nil {
+			addAttr(&attrs, "aws.waf.processed_rules", string(jsonBytes))
+		}
+	}
+
 	return attrs
+}
+
+type ProcessedRule struct {
+	RuleID string `json:"ruleId"`
+	Action string `json:"action"`
+	Type   string `json:"type,omitempty"` // TERMINATING, NON_TERMINATING, GROUP
+}
+
+func collectProcessedRules(entry *parser.WAFLogEntry) []ProcessedRule {
+	var rules []ProcessedRule
+
+	// 1. Terminating Rule
+	if entry.TerminatingRuleID != "" {
+		rules = append(rules, ProcessedRule{
+			RuleID: entry.TerminatingRuleID,
+			Action: entry.Action,
+			Type:   "TERMINATING",
+		})
+	}
+
+	// 2. Non-Terminating Rules
+	for _, rule := range entry.NonTerminatingMatchingRules {
+		rules = append(rules, ProcessedRule{
+			RuleID: rule.RuleID,
+			Action: rule.Action,
+			Type:   "NON_TERMINATING",
+		})
+	}
+
+	// 3. Rule Groups
+	for _, group := range entry.RuleGroupList {
+		// If the group itself has specific actions or inner rules
+		if group.TerminatingRule != nil {
+			rules = append(rules, ProcessedRule{
+				RuleID: group.TerminatingRule.RuleID,
+				Action: group.TerminatingRule.Action,
+				Type:   "GROUP_TERMINATING",
+			})
+		}
+		for _, rule := range group.NonTerminatingRules {
+			rules = append(rules, ProcessedRule{
+				RuleID: rule.RuleID,
+				Action: rule.Action,
+				Type:   "GROUP_NON_TERMINATING",
+			})
+		}
+	}
+
+	return rules
 }
