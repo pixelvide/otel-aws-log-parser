@@ -61,85 +61,76 @@ func init() {
 	registry.Register(&processor.WAFProcessor{})
 }
 
-func handler(ctx context.Context, rawEvent json.RawMessage) error {
-	s3Records, err := extractS3Records(logger, rawEvent)
-	if err != nil {
-		logger.Error("Failed to extract S3 records", "error", err)
-		return err
+func handler(ctx context.Context, sqsEvent events.SQSEvent) (events.SQSEventResponse, error) {
+	response := events.SQSEventResponse{
+		BatchItemFailures: []events.SQSBatchItemFailure{},
 	}
 
-	logger.Info("Lambda triggered", "record_count", len(s3Records))
+	var allEntries []adapter.LogAdapter
 
-	for _, record := range s3Records {
-		bucket := record.S3.Bucket.Name
-		key := record.S3.Object.Key
+	logger.Info("Lambda triggered", "sqs_record_count", len(sqsEvent.Records))
 
-		if bucket == "" || key == "" {
-			logger.Warn("Skipping record with empty bucket or key")
-			continue
-		}
-
-		log := logger.With("bucket", bucket, "key", key)
-		log.Info("Processing S3 object")
-
-		// Find matching processor
-		proc := registry.Find(bucket, key)
-		if proc == nil {
-			log.Info("Skipping object: no matching processor found", "key", key)
-			continue
-		}
-
-		log.Info("Found processor", "processor", proc.Name())
-
-		// Process logs
-		entries, err := proc.Process(ctx, logger, s3Client, bucket, key)
+	for _, record := range sqsEvent.Records {
+		// Parse Body as S3 Event
+		s3Records, err := parseBodyAsS3(logger, []byte(record.Body))
 		if err != nil {
-			log.Error("Error processing S3 object", "processor", proc.Name(), "error", err)
-			return err
-		}
-
-		if len(entries) == 0 {
-			log.Info("No entries found")
+			logger.Warn("Failed to parse SQS body, skipping message", "message_id", record.MessageId, "error", err)
 			continue
 		}
 
-		log.Info("Successfully parsed entries", "count", len(entries))
+		// Usually one SQS message contains one S3 event (EventBridge wrapper)
+		// But parseBodyAsS3 returns slice, so handle all
+		msgFailed := false
+		for _, s3Record := range s3Records {
+			bucket := s3Record.S3.Bucket.Name
+			key := s3Record.S3.Object.Key
 
-		// Convert and send to OTLP
-		if err := convertAndSend(entries); err != nil {
-			log.Error("Error sending to OTLP", "error", err)
-			return err
+			if bucket == "" || key == "" {
+				logger.Warn("Skipping record with empty bucket or key", "message_id", record.MessageId)
+				continue
+			}
+
+			log := logger.With("bucket", bucket, "key", key, "message_id", record.MessageId)
+			log.Info("Processing S3 object")
+
+			// Find matching processor
+			proc := registry.Find(bucket, key)
+			if proc == nil {
+				log.Info("Skipping object: no matching processor found")
+				continue
+			}
+
+			// Process logs
+			entries, err := proc.Process(ctx, logger, s3Client, bucket, key)
+			if err != nil {
+				log.Error("Error processing S3 object", "error", err)
+				msgFailed = true
+				break // Stop processing this SQS message, mark as failed
+			}
+
+			if len(entries) > 0 {
+				allEntries = append(allEntries, entries...)
+			}
+		}
+
+		if msgFailed {
+			response.BatchItemFailures = append(response.BatchItemFailures, events.SQSBatchItemFailure{
+				ItemIdentifier: record.MessageId,
+			})
 		}
 	}
 
-	return nil
-}
-
-func extractS3Records(logger *slog.Logger, raw []byte) ([]events.S3EventRecord, error) {
-	var s3Records []events.S3EventRecord
-
-	// Try SQS Event
-	var sqsEvent events.SQSEvent
-	// We strictly check for SQS Event structure
-	if err := json.Unmarshal(raw, &sqsEvent); err == nil && len(sqsEvent.Records) > 0 {
-		if sqsEvent.Records[0].Body != "" {
-			logger.Info("Detected SQS event", "count", len(sqsEvent.Records))
-			for _, record := range sqsEvent.Records {
-				recs, err := parseBodyAsS3(logger, []byte(record.Body))
-				if err != nil {
-					logger.Warn("Failed to parse SQS body", "error", err)
-					continue
-				}
-				s3Records = append(s3Records, recs...)
-			}
-			if len(s3Records) > 0 {
-				return s3Records, nil
-			}
-			return nil, fmt.Errorf("no valid S3 records found in SQS batch")
+	// Send successful entries to OTLP
+	if len(allEntries) > 0 {
+		logger.Info("Sending collected entries to OTLP", "count", len(allEntries))
+		if err := convertAndSend(allEntries); err != nil {
+			logger.Error("Error sending to OTLP", "error", err)
+			return response, err // Returning error triggers full batch failure usually, which is what we want if backend is down
 		}
 	}
 
-	return nil, fmt.Errorf("unknown event type or no valid records found (only SQS+EventBridge supported)")
+	logger.Info("Lambda execution completed", "failures", len(response.BatchItemFailures))
+	return response, nil
 }
 
 func parseBodyAsS3(logger *slog.Logger, body []byte) ([]events.S3EventRecord, error) {
